@@ -1,6 +1,7 @@
 package disposable
 
 import (
+	"context"
 	"testing"
 )
 
@@ -126,4 +127,75 @@ func BenchmarkIsDisposable_Parallel(b *testing.B) {
 			i++
 		}
 	})
+}
+
+func TestCheckEmail(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"disposable domain", "user@guerrillamail.com", true},
+		{"legitimate domain", "user@gmail.com", false},
+		{"empty string", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := CheckEmail(tt.input)
+			if err != nil {
+				t.Fatalf("CheckEmail(%q) returned error: %v", tt.input, err)
+			}
+			if result != tt.expected {
+				t.Errorf("CheckEmail(%q) = %v, want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCheckEmailWithContext(t *testing.T) {
+	ctx := context.Background()
+
+	// Test with disposable domain
+	result, err := CheckEmailWithContext(ctx, "user@mailinator.com")
+	if err != nil {
+		t.Fatalf("CheckEmailWithContext returned error: %v", err)
+	}
+	if !result {
+		t.Error("Expected mailinator.com to be disposable")
+	}
+
+	// Test with legitimate domain
+	result, err = CheckEmailWithContext(ctx, "user@gmail.com")
+	if err != nil {
+		t.Fatalf("CheckEmailWithContext returned error: %v", err)
+	}
+	if result {
+		t.Error("Expected gmail.com to not be disposable")
+	}
+
+	// Test with cancelled context (should still work since data is cached)
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	result, err = CheckEmailWithContext(cancelledCtx, "user@gmail.com")
+	if err != nil {
+		t.Fatalf("CheckEmailWithContext with cancelled context returned error: %v", err)
+	}
+	if result {
+		t.Error("Expected gmail.com to not be disposable even with cancelled context")
+	}
+}
+
+func TestIsReady(t *testing.T) {
+	// Since the checker is initialized by other tests, it should be ready
+	if !IsReady() {
+		t.Error("Expected IsReady() to return true after initialization")
+	}
+}
+
+func TestInitError(t *testing.T) {
+	// Since the checker is initialized successfully by other tests, there should be no error
+	if err := InitError(); err != nil {
+		t.Errorf("Expected InitError() to return nil, got: %v", err)
+	}
 }

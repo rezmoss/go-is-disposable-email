@@ -10,12 +10,13 @@ A high-performance Go package for detecting disposable/temporary email addresses
 ## Features
 
 - **High Performance**: Trie-based data structure for O(m) lookups where m = domain length
-- **Auto-Download**: Downloads data on first use, caches locally (~370KB compressed)
-- **57,000+ Domains**: Merged from multiple trusted sources, updated daily
+- **Auto-Download**: Downloads data on first use, caches locally (~450KB compressed)
+- **72,000+ Domains**: Merged from multiple trusted sources, updated daily
 - **Hierarchical Matching**: Detects subdomains of known disposable domains (e.g., `mail.tempmail.com`)
 - **Runtime Extensible**: Add custom domains to blocklist/allowlist at runtime
 - **Zero Dependencies**: Uses only Go standard library
-- **Thread-Safe**: Safe for concurrent use
+- **Thread-Safe**: Safe for concurrent use with race-tested code
+- **Error Handling**: Typed errors for programmatic error handling (`DownloadError`, `CacheError`, etc.)
 
 ## Installation
 
@@ -102,7 +103,7 @@ if checker.IsDisposable("user@tempmail.com") {
 
 | Option | Description |
 |--------|-------------|
-| `WithAutoRefresh(interval)` | Enable automatic background data updates |
+| `WithAutoRefresh(interval)` | Enable automatic background data updates (requires `Close()`) |
 | `WithCacheDir(dir)` | Set cache directory for downloaded data |
 | `WithHTTPTimeout(timeout)` | Set HTTP timeout for downloads |
 | `WithCustomBlocklist(domains...)` | Add domains to block |
@@ -110,11 +111,38 @@ if checker.IsDisposable("user@tempmail.com") {
 | `WithDataURL(url)` | Set custom URL for data.bin downloads |
 | `WithLogger(logger)` | Set custom logger |
 
+### Error Handling
+
+For production systems, use the error-returning variants to distinguish between "not disposable" and "initialization failed":
+
+```go
+// Check with error handling
+isDisposable, err := disposable.CheckEmail("user@tempmail.com")
+if err != nil {
+    // Handle error (network failure, cache issue, etc.)
+    log.Printf("Check failed: %v", err)
+}
+
+// Check initialization status
+if !disposable.IsReady() {
+    err := disposable.InitError()
+    log.Printf("Initialization failed: %v", err)
+}
+
+// Programmatic error type checking
+if disposable.IsDownloadError(err) {
+    // Handle download-specific error
+}
+if disposable.IsCacheError(err) {
+    // Handle cache-specific error
+}
+```
+
 ## Data Sources
 
 We gather and compile disposable email domains from various trusted sources on a daily basis. The database is automatically updated every day at 2 AM UTC via GitHub Actions.
 
-**Total unique domains: 57,000+**
+**Total unique domains: 72,000+**
 
 To add custom domains, edit `data/manual.txt` (one domain per line).
 

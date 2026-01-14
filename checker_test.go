@@ -2,6 +2,7 @@ package disposable
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -257,5 +258,216 @@ func TestCheckerWithHTTPTimeout(t *testing.T) {
 	// Should still work
 	if !checker.IsDisposable("10minutemail.com") {
 		t.Error("Expected 10minutemail.com to be disposable")
+	}
+}
+
+func TestCheckerWithAutoRefresh(t *testing.T) {
+	checker, err := New(
+		WithAutoRefresh(100 * time.Millisecond), // Very short interval for testing
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// Verify it works initially
+	if !checker.IsDisposable("mailinator.com") {
+		t.Error("Expected mailinator.com to be disposable")
+	}
+
+	// Wait a bit to allow auto-refresh to potentially run
+	time.Sleep(150 * time.Millisecond)
+
+	// Should still work after potential refresh
+	if !checker.IsDisposable("mailinator.com") {
+		t.Error("Expected mailinator.com to be disposable after potential auto-refresh")
+	}
+
+	// Close should stop the auto-refresh goroutine
+	if err := checker.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
+	}
+}
+
+func TestCheckerCloseStopsAutoRefresh(t *testing.T) {
+	checker, err := New(
+		WithAutoRefresh(50 * time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// Close should return promptly (not block indefinitely)
+	done := make(chan struct{})
+	go func() {
+		checker.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - Close returned
+	case <-time.After(2 * time.Second):
+		t.Error("Close() did not return within timeout - possible goroutine leak")
+	}
+}
+
+func TestCheckerCorruptedCache(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "disposable-corrupt-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write corrupted data to cache
+	corruptedData := []byte("this is not valid gob/gzip data")
+	if err := os.WriteFile(filepath.Join(tmpDir, "data.bin"), corruptedData, 0644); err != nil {
+		t.Fatalf("Failed to write corrupted data: %v", err)
+	}
+
+	// Creating a checker should fail or fall back to download
+	// Since we're in a test environment with real network, it should download
+	checker, err := New(WithCacheDir(tmpDir))
+	if err != nil {
+		// If download fails too, that's OK for this test
+		var initErr *InitializationError
+		if IsInitializationError(err) {
+			t.Logf("Expected error type: InitializationError: %v", err)
+		} else {
+			t.Logf("Got error (download also failed, which is OK): %v", initErr)
+		}
+		return
+	}
+	defer checker.Close()
+
+	// If we got here, the checker recovered by downloading fresh data
+	if !checker.IsDisposable("mailinator.com") {
+		t.Error("Expected mailinator.com to be disposable after recovering from corrupted cache")
+	}
+}
+
+func TestCheckerRefresh(t *testing.T) {
+	checker, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer checker.Close()
+
+	// Get initial stats
+	initialStats := checker.Stats()
+
+	// Call Refresh
+	if err := checker.Refresh(); err != nil {
+		// Network errors are acceptable in test environments
+		if IsDownloadError(err) {
+			t.Skipf("Skipping refresh test due to network error: %v", err)
+		}
+		t.Errorf("Refresh() error = %v", err)
+	}
+
+	// Stats should still be valid after refresh
+	afterStats := checker.Stats()
+	if afterStats.BlocklistCount == 0 {
+		t.Error("Expected BlocklistCount > 0 after refresh")
+	}
+
+	t.Logf("Before refresh: %d blocklist, After refresh: %d blocklist",
+		initialStats.BlocklistCount, afterStats.BlocklistCount)
+}
+
+func TestCheckerRefreshWithContext(t *testing.T) {
+	checker, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer checker.Close()
+
+	// Test with a context that has a timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := checker.RefreshWithContext(ctx); err != nil {
+		if IsDownloadError(err) {
+			t.Skipf("Skipping refresh test due to network error: %v", err)
+		}
+		t.Errorf("RefreshWithContext() error = %v", err)
+	}
+}
+
+func TestCheckerConcurrentAccess(t *testing.T) {
+	checker, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer checker.Close()
+
+	// Run multiple goroutines accessing the checker concurrently
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func() {
+			for j := 0; j < 100; j++ {
+				checker.IsDisposable("test@mailinator.com")
+				checker.IsDisposable("test@gmail.com")
+				_ = checker.Stats()
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+func TestCheckerInvalidDataURL(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "disposable-invalid-url-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Try with invalid URL and no cache
+	_, err = New(
+		WithCacheDir(tmpDir),
+		WithDataURL("https://invalid.example.com/nonexistent/data.bin"),
+		WithHTTPTimeout(2*time.Second),
+	)
+
+	// Should fail since there's no cache and URL is invalid
+	if err == nil {
+		t.Error("Expected error when using invalid URL with no cache")
+	}
+
+	// Error should be an InitializationError wrapping a DownloadError
+	if !IsInitializationError(err) {
+		t.Errorf("Expected InitializationError, got %T: %v", err, err)
+	}
+
+	var initErr *InitializationError
+	if errors.As(err, &initErr) && initErr.Err != nil {
+		if !IsDownloadError(initErr.Err) {
+			t.Logf("Underlying error is not DownloadError: %T: %v", initErr.Err, initErr.Err)
+		}
+	}
+}
+
+func TestCheckerEmptyDomain(t *testing.T) {
+	checker, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer checker.Close()
+
+	// Empty strings should return false, not panic
+	if checker.IsDisposable("") {
+		t.Error("Expected empty string to not be disposable")
+	}
+
+	if checker.IsDisposable("@") {
+		t.Error("Expected '@' to not be disposable")
+	}
+
+	if checker.IsDisposable("user@") {
+		t.Error("Expected 'user@' to not be disposable")
 	}
 }

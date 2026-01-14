@@ -2,7 +2,6 @@ package disposable
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -40,14 +39,14 @@ func New(opts ...Option) (*Checker, error) {
 	if config.CacheDir == "" {
 		cacheDir, err := getDefaultCacheDir()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cache directory: %w", err)
+			return nil, &InitializationError{Reason: "failed to get cache directory", Err: err}
 		}
 		config.CacheDir = cacheDir
 	}
 
 	// Ensure cache directory exists
 	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create cache directory: %w", err)
+		return nil, &CacheError{Path: config.CacheDir, Operation: "create", Err: err}
 	}
 
 	c := &Checker{
@@ -101,7 +100,7 @@ func (c *Checker) init(ctx context.Context) error {
 	// Download fresh data
 	c.config.Logger.Printf("Downloading data from %s...", c.config.DataURL)
 	if err := c.downloadAndLoad(ctx); err != nil {
-		return fmt.Errorf("failed to initialize: no cached data and download failed: %w", err)
+		return &InitializationError{Reason: "no cached data and download failed", Err: err}
 	}
 
 	c.applyCustomDomains()
@@ -127,12 +126,12 @@ func (c *Checker) loadFromCache() error {
 
 	fileData, err := os.ReadFile(dataPath)
 	if err != nil {
-		return fmt.Errorf("failed to read cache file: %w", err)
+		return &CacheError{Path: dataPath, Operation: "read", Err: err}
 	}
 
 	blocklist, allowlist, dataFile, err := trie.Deserialize(fileData)
 	if err != nil {
-		return fmt.Errorf("failed to deserialize cached data: %w", err)
+		return &DeserializationError{Source: "cache", Err: err}
 	}
 
 	c.mu.Lock()
@@ -158,7 +157,7 @@ func (c *Checker) downloadAndLoad(ctx context.Context) error {
 	// Deserialize to validate
 	blocklist, allowlist, dataFile, err := trie.Deserialize(fileData)
 	if err != nil {
-		return fmt.Errorf("failed to deserialize downloaded data: %w", err)
+		return &DeserializationError{Source: "download", Err: err}
 	}
 
 	// Save to cache
@@ -191,22 +190,22 @@ func (c *Checker) downloadData(ctx context.Context) ([]byte, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.config.DataURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &DownloadError{URL: c.config.DataURL, Err: err}
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download: %w", err)
+		return nil, &DownloadError{URL: c.config.DataURL, Err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP error: %d %s", resp.StatusCode, resp.Status)
+		return nil, &DownloadError{URL: c.config.DataURL, StatusCode: resp.StatusCode}
 	}
 
 	fileData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &DownloadError{URL: c.config.DataURL, Err: err}
 	}
 
 	return fileData, nil
@@ -267,7 +266,7 @@ func (c *Checker) Refresh() error {
 // RefreshWithContext is like Refresh but accepts a context for cancellation/timeout.
 func (c *Checker) RefreshWithContext(ctx context.Context) error {
 	if err := c.downloadAndLoad(ctx); err != nil {
-		return fmt.Errorf("refresh failed: %w", err)
+		return err // Already a typed error (DownloadError or DeserializationError)
 	}
 	c.applyCustomDomains()
 	return nil
@@ -321,7 +320,14 @@ func (c *Checker) Stats() Statistics {
 	}
 }
 
-// Close releases resources held by the Checker.
+// Close releases resources held by the Checker and stops the auto-refresh goroutine.
+//
+// Close MUST be called when you are done using a Checker that was created with
+// WithAutoRefresh. Failing to call Close will result in a goroutine leak.
+// It is safe to call Close multiple times; subsequent calls are no-ops.
+//
+// For Checkers without auto-refresh, calling Close is optional but recommended
+// for consistency.
 func (c *Checker) Close() error {
 	if c.cancelFunc != nil {
 		c.cancelFunc()

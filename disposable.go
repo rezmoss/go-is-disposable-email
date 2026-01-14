@@ -12,12 +12,23 @@
 //	    // Handle disposable email
 //	}
 //
+// For production systems that need error handling, use the error-returning variants:
+//
+//	isDisposable, err := disposable.CheckEmail("user@tempmail.com")
+//	if err != nil {
+//	    // Handle initialization error (network, cache, etc.)
+//	}
+//
 // For custom configuration, use the Checker type:
 //
-//	checker, _ := disposable.New(
+//	checker, err := disposable.New(
 //	    disposable.WithAutoRefresh(24 * time.Hour),
 //	    disposable.WithCustomBlocklist("internal-blocked.com"),
 //	)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer checker.Close()
 //	result := checker.IsDisposable("user@example.com")
 package disposable
 
@@ -48,6 +59,10 @@ func getDefaultChecker() (*Checker, error) {
 //
 // On first call, this function downloads the domain database if not already cached.
 // Subsequent calls use the cached data.
+//
+// Note: This function returns false on initialization errors (network failure, cache issues).
+// For production systems that need to distinguish between "not disposable" and "error",
+// use CheckEmail instead.
 func IsDisposable(emailOrDomain string) bool {
 	checker, err := getDefaultChecker()
 	if err != nil {
@@ -57,12 +72,38 @@ func IsDisposable(emailOrDomain string) bool {
 }
 
 // IsDisposableWithContext is like IsDisposable but accepts a context for cancellation.
+//
+// Note: Returns false on initialization errors. Use CheckEmailWithContext for error handling.
 func IsDisposableWithContext(ctx context.Context, emailOrDomain string) bool {
 	checker, err := getDefaultChecker()
 	if err != nil {
 		return false
 	}
 	return checker.IsDisposableWithContext(ctx, emailOrDomain)
+}
+
+// CheckEmail checks if an email address or domain is from a disposable email service.
+// Unlike IsDisposable, this function returns an error if the checker fails to initialize.
+//
+// Returns:
+//   - (true, nil) if the domain is disposable
+//   - (false, nil) if the domain is not disposable
+//   - (false, error) if the checker failed to initialize
+func CheckEmail(emailOrDomain string) (bool, error) {
+	checker, err := getDefaultChecker()
+	if err != nil {
+		return false, err
+	}
+	return checker.IsDisposable(emailOrDomain), nil
+}
+
+// CheckEmailWithContext is like CheckEmail but accepts a context for cancellation.
+func CheckEmailWithContext(ctx context.Context, emailOrDomain string) (bool, error) {
+	checker, err := getDefaultChecker()
+	if err != nil {
+		return false, err
+	}
+	return checker.IsDisposableWithContext(ctx, emailOrDomain), nil
 }
 
 // Refresh updates the domain database by downloading fresh data from the source.
@@ -85,6 +126,8 @@ func RefreshWithContext(ctx context.Context) error {
 
 // AddDomains adds custom domains to the blocklist at runtime.
 // These additions are not persisted and will be lost on program restart.
+//
+// Note: Silently fails if the checker is not initialized. Use IsReady() to check status.
 func AddDomains(domains ...string) {
 	checker, err := getDefaultChecker()
 	if err != nil {
@@ -95,6 +138,8 @@ func AddDomains(domains ...string) {
 
 // AddAllowlist adds domains to the allowlist at runtime.
 // Allowlisted domains will never be reported as disposable.
+//
+// Note: Silently fails if the checker is not initialized. Use IsReady() to check status.
 func AddAllowlist(domains ...string) {
 	checker, err := getDefaultChecker()
 	if err != nil {
@@ -104,6 +149,8 @@ func AddAllowlist(domains ...string) {
 }
 
 // GetBlocklist returns a copy of all blocked domains.
+//
+// Note: Returns nil if the checker is not initialized. Use IsReady() to check status.
 func GetBlocklist() []string {
 	checker, err := getDefaultChecker()
 	if err != nil {
@@ -113,6 +160,8 @@ func GetBlocklist() []string {
 }
 
 // GetAllowlist returns a copy of all allowlisted domains.
+//
+// Note: Returns nil if the checker is not initialized. Use IsReady() to check status.
 func GetAllowlist() []string {
 	checker, err := getDefaultChecker()
 	if err != nil {
@@ -122,10 +171,26 @@ func GetAllowlist() []string {
 }
 
 // Stats returns statistics about the current database.
+//
+// Note: Returns empty Statistics if the checker is not initialized. Use IsReady() to check status.
 func Stats() Statistics {
 	checker, err := getDefaultChecker()
 	if err != nil {
 		return Statistics{}
 	}
 	return checker.Stats()
+}
+
+// IsReady returns true if the default checker is initialized and ready for use.
+// This can be used to verify that the domain database was loaded successfully.
+func IsReady() bool {
+	checker, err := getDefaultChecker()
+	return err == nil && checker != nil
+}
+
+// InitError returns the initialization error if the default checker failed to initialize.
+// Returns nil if the checker is ready or hasn't been initialized yet.
+func InitError() error {
+	_, err := getDefaultChecker()
+	return err
 }

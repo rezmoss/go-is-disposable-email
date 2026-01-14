@@ -89,7 +89,21 @@ func WithMode(mode Mode) Option {
 	}
 }
 
-// WithAutoRefresh enables automatic updates at the specified interval.
+// WithAutoRefresh enables automatic background updates at the specified interval.
+//
+// IMPORTANT: When auto-refresh is enabled, you MUST call Close() on the Checker
+// when done to stop the background goroutine. Failing to call Close() will result
+// in a goroutine leak.
+//
+// Example:
+//
+//	checker, err := disposable.New(
+//	    disposable.WithAutoRefresh(24 * time.Hour),
+//	)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer checker.Close() // REQUIRED to prevent goroutine leak
 func WithAutoRefresh(interval time.Duration) Option {
 	return func(c *Config) {
 		c.AutoRefresh = true
