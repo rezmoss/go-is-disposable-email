@@ -10,7 +10,7 @@ A high-performance Go package for detecting disposable/temporary email addresses
 ## Features
 
 - **High Performance**: Trie-based data structure for O(m) lookups where m = domain length
-- **Offline First**: Works without network access using embedded data (~370KB compressed)
+- **Auto-Download**: Downloads data on first use, caches locally (~370KB compressed)
 - **57,000+ Domains**: Merged from multiple trusted sources, updated daily
 - **Hierarchical Matching**: Detects subdomains of known disposable domains (e.g., `mail.tempmail.com`)
 - **Runtime Extensible**: Add custom domains to blocklist/allowlist at runtime
@@ -83,7 +83,7 @@ import (
 
 // Create a checker with custom configuration
 checker, err := disposable.New(
-    disposable.WithOffline(),                     // Use only embedded data
+    disposable.WithAutoRefresh(24 * time.Hour),    // Enable auto-refresh
     disposable.WithCustomBlocklist("blocked.com"), // Add custom blocked domains
     disposable.WithCustomAllowlist("allowed.com"), // Add custom allowed domains
 )
@@ -102,28 +102,21 @@ if checker.IsDisposable("user@tempmail.com") {
 
 | Option | Description |
 |--------|-------------|
-| `WithOffline()` | Use only embedded data, no network calls |
-| `WithMode(mode)` | Set operating mode (Online, Offline, Hybrid) |
-| `WithAutoRefresh(interval)` | Enable automatic data updates |
+| `WithAutoRefresh(interval)` | Enable automatic background data updates |
 | `WithCacheDir(dir)` | Set cache directory for downloaded data |
 | `WithHTTPTimeout(timeout)` | Set HTTP timeout for downloads |
 | `WithCustomBlocklist(domains...)` | Add domains to block |
 | `WithCustomAllowlist(domains...)` | Add domains to allow |
+| `WithDataURL(url)` | Set custom URL for data.bin downloads |
 | `WithLogger(logger)` | Set custom logger |
 
 ## Data Sources
 
-This package aggregates disposable email domains from multiple trusted sources, which are automatically scanned and merged daily:
-
-| Source | URL | Domains |
-|--------|-----|---------|
-| **FGRibreau/mailchecker** | https://github.com/FGRibreau/mailchecker | ~55,000 |
-| **disposable-email-domains** | https://github.com/disposable-email-domains/disposable-email-domains | ~5,000 |
-| **Manual additions** | This repository's `data/manual.txt` | Community contributed |
-
-The data is updated automatically every day at 2 AM UTC via GitHub Actions.
+We gather and compile disposable email domains from various trusted sources on a daily basis. The database is automatically updated every day at 2 AM UTC via GitHub Actions.
 
 **Total unique domains: 57,000+**
+
+To add custom domains, edit `data/manual.txt` (one domain per line).
 
 ## How It Works
 
