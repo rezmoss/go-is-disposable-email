@@ -1,0 +1,83 @@
+# GoReleaser configuration for go-is-disposable-email
+# This is a Go library, not a CLI tool, so we don't build binaries
+# We only create releases with source code and data.bin
+
+version: 2
+
+# Skip binary builds - this is a library
+builds:
+  - skip: true
+
+# Include data.bin in the release assets
+extra_files:
+  - glob: data/data.bin
+
+# Release configuration
+release:
+  github:
+    owner: rezmoss
+    name: go-is-disposable-email
+
+  # Release name template
+  name_template: "v{{.Version}}"
+
+  # Release notes
+  header: |
+    ## go-is-disposable-email v{{.Version}}
+
+    A Go package for detecting disposable/temporary email addresses.
+
+    ### Installation
+
+    ```bash
+    go get github.com/rezmoss/go-is-disposable-email@v{{.Version}}
+    ```
+
+    ### Data File
+
+    The `data.bin` file is included in this release. It will be automatically downloaded when you first use the package.
+
+  footer: |
+    ---
+
+    **Full Changelog**: https://github.com/rezmoss/go-is-disposable-email/compare/{{.PreviousTag}}...{{.Tag}}
+
+  # Don't mark as prerelease
+  prerelease: auto
+
+  # Draft mode (set to false for auto-publish)
+  draft: false
+
+# Changelog configuration
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Other
+      order: 999
+
+# Source archive configuration
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}-{{ .Version }}-source"
+
+# Checksum configuration
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256

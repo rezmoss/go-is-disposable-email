@@ -1,0 +1,69 @@
+name: Update Disposable Email Data
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:      # Manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Save old checksum
+        id: old_checksum
+        run: |
+          if [ -f data/data.bin ]; then
+            echo "checksum=$(sha256sum data/data.bin | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          else
+            echo "checksum=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update data
+        run: go run ./cmd/disposable-update -o ./data -v -summary /tmp/update-summary.txt
+
+      - name: Check for changes
+        id: check
+        run: |
+          NEW_CHECKSUM=$(sha256sum data/data.bin | cut -d' ' -f1)
+          OLD_CHECKSUM="${{ steps.old_checksum.outputs.checksum }}"
+
+          if [ "$NEW_CHECKSUM" = "$OLD_CHECKSUM" ]; then
+            echo "No changes detected in data.bin (checksum unchanged)"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected in data.bin"
+            echo "Old checksum: $OLD_CHECKSUM"
+            echo "New checksum: $NEW_CHECKSUM"
+            echo "changed=true" >> $GITHUB_OUTPUT
+            # Read summary for commit message
+            if [ -f /tmp/update-summary.txt ]; then
+              SUMMARY=$(cat /tmp/update-summary.txt)
+              echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+            else
+              echo "summary=data updated" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Commit and push changes
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/data.bin
+          git commit -m "chore: daily update - ${{ steps.check.outputs.summary }}"
+          git push
+
+      - name: Skip notification
+        if: steps.check.outputs.changed == 'false'
+        run: echo "No changes to commit - data.bin is already up to date"

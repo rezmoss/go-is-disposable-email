@@ -1,0 +1,6 @@
+# Manual additions of disposable email domains
+# Add one domain per line
+# Lines starting with # are comments
+#
+# To contribute: Open an issue or PR to add domains to this file
+#
