@@ -7,6 +7,8 @@
 # Blocklist sources
 blocklist|FGRibreau/mailchecker|https://raw.githubusercontent.com/FGRibreau/mailchecker/master/list.txt
 blocklist|disposable-email-domains|https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf
+blocklist|disposable/disposable-email-domains|https://raw.githubusercontent.com/disposable/disposable-email-domains/master/domains.txt
+blocklist|7c/fakefilter|https://raw.githubusercontent.com/7c/fakefilter/main/txt/data.txt
 
 # Allowlist sources
 allowlist|disposable-email-domains|https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/allowlist.conf
