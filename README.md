@@ -166,5 +166,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-- [FGRibreau/mailchecker](https://github.com/FGRibreau/mailchecker) - Primary source of disposable domains
-- [disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains) - Additional domains and allowlist
+- [FGRibreau/mailchecker](https://github.com/FGRibreau/mailchecker)
+- [disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains)
+- [disposable/disposable-email-domains](https://github.com/disposable/disposable-email-domains)
+- [7c/fakefilter](https://github.com/7c/fakefilter)

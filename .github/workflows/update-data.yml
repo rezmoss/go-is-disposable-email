@@ -20,40 +20,44 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Save old checksum
-        id: old_checksum
-        run: |
-          if [ -f data/data.bin ]; then
-            echo "checksum=$(sha256sum data/data.bin | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          else
-            echo "checksum=none" >> $GITHUB_OUTPUT
-          fi
-
       - name: Update data
         run: go run ./cmd/disposable-update -o ./data -v -summary /tmp/update-summary.txt
 
       - name: Check for changes
         id: check
         run: |
-          NEW_CHECKSUM=$(sha256sum data/data.bin | cut -d' ' -f1)
-          OLD_CHECKSUM="${{ steps.old_checksum.outputs.checksum }}"
+          # Read the summary to determine if there were actual domain changes
+          SUMMARY="no changes"
+          if [ -f /tmp/update-summary.txt ]; then
+            SUMMARY=$(cat /tmp/update-summary.txt)
+          fi
 
-          if [ "$NEW_CHECKSUM" = "$OLD_CHECKSUM" ]; then
-            echo "No changes detected in data.bin (checksum unchanged)"
+          echo "Summary: $SUMMARY"
+
+          # Check if summary indicates actual changes (not "no changes")
+          if [ "$SUMMARY" = "no changes" ]; then
+            echo "No domain changes detected"
             echo "changed=false" >> $GITHUB_OUTPUT
           else
-            echo "Changes detected in data.bin"
-            echo "Old checksum: $OLD_CHECKSUM"
-            echo "New checksum: $NEW_CHECKSUM"
+            echo "Domain changes detected: $SUMMARY"
             echo "changed=true" >> $GITHUB_OUTPUT
-            # Read summary for commit message
-            if [ -f /tmp/update-summary.txt ]; then
-              SUMMARY=$(cat /tmp/update-summary.txt)
-              echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
-            else
-              echo "summary=data updated" >> $GITHUB_OUTPUT
-            fi
+            echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
           fi
+
+      - name: Validate file size
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          FILE_SIZE=$(stat -c%s data/data.bin 2>/dev/null || stat -f%z data/data.bin)
+          echo "File size: $FILE_SIZE bytes"
+
+          # Minimum expected size is 100KB (100000 bytes)
+          if [ "$FILE_SIZE" -lt 100000 ]; then
+            echo "ERROR: data.bin is too small ($FILE_SIZE bytes). Expected at least 100KB."
+            echo "This might indicate a corrupted file. Aborting commit."
+            exit 1
+          fi
+
+          echo "File size validation passed"
 
       - name: Commit and push changes
         if: steps.check.outputs.changed == 'true'
