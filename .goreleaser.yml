@@ -8,10 +8,6 @@ version: 2
 builds:
   - skip: true
 
-# Include data.bin in the release assets
-extra_files:
-  - glob: data/data.bin
-
 # Release configuration
 release:
   github:
@@ -20,6 +16,10 @@ release:
 
   # Release name template
   name_template: "v{{.Version}}"
+
+  # Include data.bin in the release assets
+  extra_files:
+    - glob: data/data.bin
 
   # Release notes
   header: |
