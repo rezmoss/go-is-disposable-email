@@ -24,7 +24,16 @@ type UpdateStats struct {
 	OldAllowlistCount int
 	NewAllowlistCount int
 	FailedSources     []string
+
+	// AddedBlocklist and RemovedBlocklist are the exact domains that changed in
+	// the blocklist this run, sorted. Populated when previous data is available.
+	AddedBlocklist   []string
+	RemovedBlocklist []string
 }
+
+// changelogPreviewLimit caps how many domains are listed inline in the release
+// notes; the full lists are written to added.txt / removed.txt.
+const changelogPreviewLimit = 50
 
 // Summary returns a short summary of changes
 func (s *UpdateStats) Summary() string {
@@ -52,6 +61,95 @@ func (s *UpdateStats) Summary() string {
 	return strings.Join(parts, ", ")
 }
 
+// ReleaseNotes renders Markdown release notes describing the exact domains that
+// changed this run. The inline lists are capped to changelogPreviewLimit; the
+// full lists live in the added.txt / removed.txt release assets.
+func (s *UpdateStats) ReleaseNotes() string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "## Disposable email data update\n\n")
+	fmt.Fprintf(&b, "**Blocklist:** +%d / -%d (total: %d)\n\n",
+		len(s.AddedBlocklist), len(s.RemovedBlocklist), s.NewBlocklistCount)
+
+	allowlistDiff := s.NewAllowlistCount - s.OldAllowlistCount
+	fmt.Fprintf(&b, "**Allowlist:** %+d (total: %d)\n\n", allowlistDiff, s.NewAllowlistCount)
+
+	writeChangeSection(&b, "Added domains", "+", s.AddedBlocklist, "added.txt")
+	writeChangeSection(&b, "Removed domains", "-", s.RemovedBlocklist, "removed.txt")
+
+	if len(s.FailedSources) > 0 {
+		fmt.Fprintf(&b, "> ⚠️ Sources unavailable this run: %s\n\n", strings.Join(s.FailedSources, ", "))
+	}
+
+	fmt.Fprintf(&b, "### Installation\n\n```bash\ngo get github.com/rezmoss/go-is-disposable-email@latest\n```\n")
+
+	return b.String()
+}
+
+// writeChangeSection appends a capped diff block for one set of changed domains.
+func writeChangeSection(b *strings.Builder, title, marker string, domains []string, asset string) {
+	if len(domains) == 0 {
+		return
+	}
+
+	limit := len(domains)
+	if limit > changelogPreviewLimit {
+		limit = changelogPreviewLimit
+	}
+
+	fmt.Fprintf(b, "### %s (%d)\n\n```diff\n", title, len(domains))
+	for _, d := range domains[:limit] {
+		fmt.Fprintf(b, "%s %s\n", marker, d)
+	}
+	if len(domains) > limit {
+		fmt.Fprintf(b, "  … and %d more (see %s)\n", len(domains)-limit, asset)
+	}
+	fmt.Fprintf(b, "```\n\n")
+}
+
+// writeChangelog writes the release artifacts describing this update: the full
+// added/removed domain lists plus Markdown release notes.
+func (s *UpdateStats) writeChangelog(dir string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	if err := writeDomainList(filepath.Join(dir, "added.txt"), s.AddedBlocklist); err != nil {
+		return err
+	}
+	if err := writeDomainList(filepath.Join(dir, "removed.txt"), s.RemovedBlocklist); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "notes.md"), []byte(s.ReleaseNotes()), 0644)
+}
+
+// writeDomainList writes one domain per line, sorted by the caller.
+func writeDomainList(path string, domains []string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, d := range domains {
+		if _, err := fmt.Fprintln(f, d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// diffSorted returns the sorted keys present in a but not in b.
+func diffSorted(a, b map[string]struct{}) []string {
+	var diff []string
+	for domain := range a {
+		if _, ok := b[domain]; !ok {
+			diff = append(diff, domain)
+		}
+	}
+	sort.Strings(diff)
+	return diff
+}
+
 func main() {
 	outputDir := flag.String("o", "./data", "Output directory for data.bin")
 	sourcesFile := flag.String("sources", "", "Path to sources.txt file (default: <output-dir>/sources.txt)")
@@ -59,6 +157,7 @@ func main() {
 	verbose := flag.Bool("v", false, "Verbose output")
 	timeout := flag.Duration("timeout", 60*time.Second, "HTTP timeout for downloads")
 	summaryFile := flag.String("summary", "", "Write update summary to file (for CI)")
+	changelogDir := flag.String("changelog", "", "Directory to write release artifacts (added.txt, removed.txt, notes.md)")
 	flag.Parse()
 
 	// Default sources file location
@@ -66,13 +165,13 @@ func main() {
 		*sourcesFile = filepath.Join(*outputDir, "sources.txt")
 	}
 
-	if err := run(*outputDir, *sourcesFile, *manualFile, *verbose, *timeout, *summaryFile); err != nil {
+	if err := run(*outputDir, *sourcesFile, *manualFile, *verbose, *timeout, *summaryFile, *changelogDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(outputDir, sourcesFile, manualFile string, verbose bool, timeout time.Duration, summaryFile string) error {
+func run(outputDir, sourcesFile, manualFile string, verbose bool, timeout time.Duration, summaryFile, changelogDir string) error {
 	log := func(format string, args ...any) {
 		if verbose {
 			fmt.Printf(format+"\n", args...)
@@ -84,11 +183,16 @@ func run(outputDir, sourcesFile, manualFile string, verbose bool, timeout time.D
 
 	// Load existing data to compare changes
 	stats := &UpdateStats{}
+	var oldBlocklistSet map[string]struct{}
 	outputPath := filepath.Join(outputDir, "data.bin")
 	if existingData, err := os.ReadFile(outputPath); err == nil {
 		if oldBlocklist, oldAllowlist, _, err := trie.Deserialize(existingData); err == nil {
 			stats.OldBlocklistCount = oldBlocklist.Size()
 			stats.OldAllowlistCount = oldAllowlist.Size()
+			oldBlocklistSet = make(map[string]struct{}, stats.OldBlocklistCount)
+			for _, d := range oldBlocklist.GetAll() {
+				oldBlocklistSet[d] = struct{}{}
+			}
 			log("Existing data: %d blocklist, %d allowlist domains", stats.OldBlocklistCount, stats.OldAllowlistCount)
 		}
 	}
@@ -228,6 +332,10 @@ func run(outputDir, sourcesFile, manualFile string, verbose bool, timeout time.D
 	stats.NewBlocklistCount = blocklistTrie.Size()
 	stats.NewAllowlistCount = allowlistTrie.Size()
 
+	// Compute the exact blocklist changes against the previous data.
+	stats.AddedBlocklist = diffSorted(blocklist, oldBlocklistSet)
+	stats.RemovedBlocklist = diffSorted(oldBlocklistSet, blocklist)
+
 	// Print stats
 	fmt.Printf("Successfully generated %s\n", outputPath)
 	fmt.Printf("  Blocklist domains: %d\n", blocklistTrie.Size())
@@ -243,6 +351,13 @@ func run(outputDir, sourcesFile, manualFile string, verbose bool, timeout time.D
 	if summaryFile != "" {
 		if err := os.WriteFile(summaryFile, []byte(stats.Summary()), 0644); err != nil {
 			log("Warning: could not write summary file: %v", err)
+		}
+	}
+
+	// Write release changelog artifacts if requested (for CI)
+	if changelogDir != "" {
+		if err := stats.writeChangelog(changelogDir); err != nil {
+			log("Warning: could not write changelog: %v", err)
 		}
 	}
 

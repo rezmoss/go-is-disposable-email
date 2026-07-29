@@ -2,7 +2,7 @@ name: Update Disposable Email Data
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+    - cron: '0 2 * * 0'  # Weekly on Sunday at 2 AM UTC
   workflow_dispatch:      # Manual trigger
 
 permissions:
@@ -14,6 +14,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history + tags, needed to compute next version
+          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -21,7 +24,11 @@ jobs:
           go-version: '1.21'
 
       - name: Update data
-        run: go run ./cmd/disposable-update -o ./data -v -summary /tmp/update-summary.txt
+        run: >
+          go run ./cmd/disposable-update
+          -o ./data -v
+          -summary /tmp/update-summary.txt
+          -changelog /tmp/changelog
 
       - name: Check for changes
         id: check
@@ -65,8 +72,47 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/data.bin
-          git commit -m "chore: daily update - ${{ steps.check.outputs.summary }}"
+          git commit -m "chore: weekly update - ${{ steps.check.outputs.summary }}"
           git push
+
+      - name: Compute next version
+        if: steps.check.outputs.changed == 'true'
+        id: version
+        run: |
+          # Highest existing vMAJOR.MINOR.PATCH tag; default to v0.0.0 if none.
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          echo "Latest tag: $LATEST"
+
+          VERSION=${LATEST#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          # Guard against non-numeric components (e.g. pre-release suffixes).
+          if ! [[ "$MAJOR" =~ ^[0-9]+$ && "$MINOR" =~ ^[0-9]+$ && "$PATCH" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: latest tag '$LATEST' is not a plain vMAJOR.MINOR.PATCH version."
+            exit 1
+          fi
+
+          NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          echo "Next version: $NEXT"
+          echo "next=$NEXT" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        if: steps.check.outputs.changed == 'true'
+        env:
+          # GITHUB_TOKEN-created tags do not re-trigger the tag-push release
+          # workflow, so this will not create a duplicate release.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.next }}" \
+            --title "${{ steps.version.outputs.next }}" \
+            --notes-file /tmp/changelog/notes.md \
+            --target "$(git rev-parse HEAD)" \
+            data/data.bin \
+            /tmp/changelog/added.txt \
+            /tmp/changelog/removed.txt
 
       - name: Skip notification
         if: steps.check.outputs.changed == 'false'

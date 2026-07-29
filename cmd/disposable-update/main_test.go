@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,70 @@ func TestUpdateStatsSummary(t *testing.T) {
 	}
 }
 
+func TestDiffSorted(t *testing.T) {
+	a := map[string]struct{}{"b.com": {}, "a.com": {}, "c.com": {}}
+	b := map[string]struct{}{"b.com": {}}
+
+	got := diffSorted(a, b)
+	want := []string{"a.com", "c.com"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("diffSorted = %v, want %v", got, want)
+	}
+
+	if len(diffSorted(b, a)) != 0 {
+		t.Errorf("expected no domains removed, got %v", diffSorted(b, a))
+	}
+}
+
+func TestReleaseNotesCapsPreview(t *testing.T) {
+	stats := &UpdateStats{NewBlocklistCount: 200}
+	for i := 0; i < changelogPreviewLimit+10; i++ {
+		stats.AddedBlocklist = append(stats.AddedBlocklist, fmt.Sprintf("domain%03d.com", i))
+	}
+
+	notes := stats.ReleaseNotes()
+
+	if !strings.Contains(notes, "Added domains (60)") {
+		t.Errorf("expected added count in notes, got:\n%s", notes)
+	}
+	if !strings.Contains(notes, "and 10 more (see added.txt)") {
+		t.Errorf("expected overflow line in notes, got:\n%s", notes)
+	}
+	// Domains beyond the preview limit must not be listed inline.
+	if strings.Contains(notes, "domain059.com") {
+		t.Error("domain beyond preview limit should not appear inline")
+	}
+}
+
+func TestWriteChangelog(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "changelog-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	stats := &UpdateStats{
+		NewBlocklistCount: 3,
+		AddedBlocklist:    []string{"new1.com", "new2.com"},
+		RemovedBlocklist:  []string{"gone.com"},
+	}
+
+	if err := stats.writeChangelog(tmpDir); err != nil {
+		t.Fatalf("writeChangelog error: %v", err)
+	}
+
+	for _, name := range []string{"added.txt", "removed.txt", "notes.md"} {
+		if _, err := os.Stat(filepath.Join(tmpDir, name)); err != nil {
+			t.Errorf("expected %s to exist: %v", name, err)
+		}
+	}
+
+	added, _ := os.ReadFile(filepath.Join(tmpDir, "added.txt"))
+	if string(added) != "new1.com\nnew2.com\n" {
+		t.Errorf("added.txt = %q", string(added))
+	}
+}
+
 func TestRunWithSourcesFile(t *testing.T) {
 	// Create a temporary directory for test
 	tmpDir, err := os.MkdirTemp("", "disposable-update-test-*")
@@ -249,7 +314,7 @@ allowlist|disposable-email-domains|https://raw.githubusercontent.com/disposable-
 	outputDir := filepath.Join(tmpDir, "output")
 
 	// Run the update
-	err = run(outputDir, sourcesPath, "", true, 60*time.Second, "")
+	err = run(outputDir, sourcesPath, "", true, 60*time.Second, "", "")
 	if err != nil {
 		t.Fatalf("run() error: %v", err)
 	}
